@@ -1,68 +1,63 @@
 import streamlit as st
 import re
 import pandas as pd
+from nltk.tokenize import word_tokenize
+from nltk.corpus import stopwords
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
-import time
 
 # Load the pre-trained SentenceTransformer model
 model = SentenceTransformer('paraphrase-MiniLM-L6-v2')
 
-# Function to clean user query
+# Function to tokenize and clean user query
 def clean_data(data):
-    # Remove punctuation and convert to lowercase
-    data = re.sub(r'[^\w\s]', '', data)
-    data = data.lower()
-    return data
+    stop_words = set(stopwords.words('english'))
+    tokens = word_tokenize(data)
+    # Remove punctuation, stopwords, and convert to lowercase
+    cleaned_tokens = [word.lower() for word in tokens if word.isalnum() and word.lower() not in stop_words]
+    return " ".join(cleaned_tokens)
 
-# Function to perform search
-def perform_search(query, database):
-    # Calculate similarity scores
-    scores = []
-    for item in database:
-        item_embedding = model.encode(item).reshape(1, -1)
-        score = cosine_similarity(query, item_embedding)[0][0]
-        scores.append(score)
-    
-    # Sort by similarity scores and return top results
-    results = [(score, item) for score, item in zip(scores, database)]
-    results.sort(reverse=True)
-    return results
+# Function to format movie/series result for display
+def format_movie_series(movie_series, id):
+    return f"[{movie_series}](https://www.opensubtitles.org/en/subtitles/{id})"
+
+# Function to calculate similarity and retrieve sorted indices
+def get_sorted_indices(query, data):
+    query_embed = model.encode(query).reshape(1, -1)
+    similarities = cosine_similarity(query_embed, model.encode(data))
+    return similarities.argsort(axis=1)[:, ::-1].flatten()
+
+# Load the DataFrame outside of the search button block
+df_30_percent_data = pd.read_csv("C:/Users/rjsek/Downloads/final_df.csv")  # Replace "your_data.csv" with the actual file path
 
 # Streamlit UI
+st.set_page_config(layout="wide")  # Wide layout for better display
 st.title("🎥 Movies/Series Subtitle Search Engine 🔎")
-search_query = st.text_input("Search here 🔬",placeholder="Enter a name of the movie or a series to search")
+search_query = st.text_input("Search here 🔬", placeholder="Enter a name of the movie or a series to search")
+
+if "results" not in st.session_state:
+    st.session_state.results = None
 
 if st.button("Search"):
-    st.subheader("Subtitle Files ⬇️")
     search_query_cleaned = clean_data(search_query)
-    query_embed = model.encode(search_query_cleaned).reshape(1, -1)
+    sorted_indices = get_sorted_indices(search_query_cleaned, df_30_percent_data['Movies/Series'])
+    st.session_state.results = sorted_indices
 
-    # Simulated database
-    df_10_percent_data = pd.read_csv("C:/Users/rjsek/Downloads/df_10_percent_data.csv")  # Replace "your_data.csv" with the actual file path
-    database = df_10_percent_data['Movies/Series'].tolist()
+if st.session_state.results is not None:
+    sorted_indices = st.session_state.results
 
-    # Perform search
-    search_results = perform_search(query_embed, database)
+    # Pagination
+    page_size = 10
+    total_pages = len(sorted_indices) // page_size + 1
+    page_number = st.number_input("Page Number", min_value=1, max_value=total_pages, value=1)
+    start_idx = (page_number - 1) * page_size
+    end_idx = min(start_idx + page_size, len(sorted_indices))
+    
+    # Display results for the selected page
+    for idx in sorted_indices[start_idx:end_idx]:
+        movie_series = df_30_percent_data.iloc[idx]['Movies/Series']
+        id = df_30_percent_data.iloc[idx]['id']
+        st.markdown(format_movie_series(movie_series, id), unsafe_allow_html=True)
 
-    # Paginate the results
-    num_results = len(search_results)
-    num_pages = (num_results - 1) // 10 + 1
-
-    page_num = st.number_input("Enter page number:", min_value=1, max_value=num_pages, value=1)
-
-    start_idx = (page_num - 1) * 10
-    end_idx = min(page_num * 10, num_results)
-
-    paginated_results = search_results[start_idx:end_idx]
-
-    # Display the results for the selected page
-    for _, item in paginated_results:
-        st.markdown(f"[{item}](https://www.opensubtitles.org/en/subtitles/{item})")
-
-
-        # Add a short delay between requests
-        time.sleep(0.1)  # Adjust the delay as needed to avoid triggering security measures
-
-    # Display pagination at the bottom of the page
-    st.write(f"Page {page_num} of {num_pages}")
+    # Display page information at the bottom
+    st.markdown(f"Page {page_number} of {total_pages}")
